@@ -17,8 +17,17 @@ const raleway = Raleway({
 export const metadata: Metadata = {
   title: "Whisper App - Capture Your Thoughts By Voice",
   description: "Convert your thoughts into text by voice with Whisper.",
+  manifest: "/site.webmanifest",
   openGraph: {
     images: "https://usewhisper.io/og.jpg",
+  },
+  icons: {
+    apple: "/icons/icon-192x192.png",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Whisper",
+    statusBarStyle: "default",
   },
 };
 
