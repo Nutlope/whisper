@@ -1,6 +1,6 @@
 # How to build a real-time audio transcription app with Whisper and Together AI
 
-*August 2025 ・ By Riccardo Giorato*
+_August 2025 ・ By Riccardo Giorato_
 
 Whisper is an audio transcription app that converts speech to text almost instantly. It's built using Together AI's Whisper model and supports both live recording and file uploads.
 
@@ -14,7 +14,8 @@ Whisper's core interaction is a recording modal where users can capture audio di
 
 ```tsx
 function RecordingModal({ onClose }: { onClose: () => void }) {
-  const { recording, audioBlob, startRecording, stopRecording } = useAudioRecording();
+  const { recording, audioBlob, startRecording, stopRecording } =
+    useAudioRecording();
 
   const handleRecordingToggle = async () => {
     if (recording) {
@@ -53,7 +54,7 @@ To capture audio, we use the MediaRecorder API with a simple hook:
 function useAudioRecording() {
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -61,25 +62,25 @@ function useAudioRecording() {
     try {
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
+
       // Create MediaRecorder
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
-      
+
       // Collect audio data
       mediaRecorder.ondataavailable = (e) => {
         chunksRef.current.push(e.data);
       };
-      
+
       // Create blob when recording stops
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         setAudioBlob(blob);
         // Stop all tracks to release microphone
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
       };
-      
+
       mediaRecorder.start();
       setRecording(true);
     } catch (err) {
@@ -107,21 +108,21 @@ Once we have our audio blob (from recording) or file (from upload), we need to s
 ```tsx
 const handleSaveRecording = async () => {
   if (!audioBlob) return;
-  
+
   try {
     // Upload to S3
     const file = new File([audioBlob], `recording-${Date.now()}.webm`, {
       type: "audio/webm",
     });
     const { url } = await uploadToS3(file);
-    
+
     // Call our tRPC endpoint
     const { id } = await transcribeMutation.mutateAsync({
       audioUrl: url,
       language: selectedLanguage,
       durationSeconds: duration,
     });
-    
+
     // Navigate to transcription page
     router.push(`/whispers/${id}`);
   } catch (err) {
@@ -135,6 +136,10 @@ const handleSaveRecording = async () => {
 Our backend uses tRPC to provide end-to-end type safety. Here's our transcription endpoint:
 
 ```tsx
+import { Together } from "together-ai";
+import { createTogetherAI } from "@ai-sdk/togetherai";
+import { generateText } from "ai";
+
 export const whisperRouter = t.router({
   transcribeFromS3: protectedProcedure
     .input(
@@ -146,9 +151,11 @@ export const whisperRouter = t.router({
     )
     .mutation(async ({ input, ctx }) => {
       // Call Together AI's Whisper model
-      const res = await togetherBaseClientWithKey(
-        ctx.togetherApiKey
-      ).audio.transcriptions.create({
+      const togetherClient = new Together({
+        apiKey: process.env.TOGETHER_API_KEY,
+      });
+
+      const res = await togetherClient.audio.transcriptions.create({
         file: input.audioUrl,
         model: "openai/whisper-large-v3",
         language: input.language || "en",
@@ -157,11 +164,13 @@ export const whisperRouter = t.router({
       const transcription = res.text as string;
 
       // Generate a title using LLM
+      const togetherAI = createTogetherAI({
+        apiKey: process.env.TOGETHER_API_KEY,
+      });
+
       const { text: title } = await generateText({
         prompt: `Generate a title for the following transcription with max of 10 words: ${transcription}`,
-        model: togetherVercelAiClient(ctx.togetherApiKey)(
-          "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-        ),
+        model: togetherAI("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         maxTokens: 10,
       });
 
@@ -174,11 +183,13 @@ export const whisperRouter = t.router({
           userId: ctx.auth.userId,
           fullTranscription: transcription,
           audioTracks: {
-            create: [{
-              fileUrl: input.audioUrl,
-              partialTranscription: transcription,
-              language: input.language,
-            }],
+            create: [
+              {
+                fileUrl: input.audioUrl,
+                partialTranscription: transcription,
+                language: input.language,
+              },
+            ],
           },
         },
       });
@@ -207,21 +218,21 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const handleDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file) return;
-    
+
     try {
       // Get audio duration and upload in parallel
       const [duration, { url }] = await Promise.all([
         getDuration(file),
         uploadToS3(file),
       ]);
-      
+
       // Transcribe using the same endpoint
       const { id } = await transcribeMutation.mutateAsync({
         audioUrl: url,
         language,
         durationSeconds: Math.round(duration),
       });
-      
+
       router.push(`/whispers/${id}`);
     } catch (err) {
       toast.error("Failed to transcribe audio. Please try again.");
@@ -253,14 +264,19 @@ function UploadModal({ onClose }: { onClose: () => void }) {
 Once we have a transcription, users can transform it using LLMs. We support summarization, extraction, and custom transformations:
 
 ```tsx
+import { createTogetherAI } from "@ai-sdk/togetherai";
+import { generateText } from "ai";
+
 const transformText = async (prompt: string, transcription: string) => {
+  const togetherAI = createTogetherAI({
+    apiKey: process.env.TOGETHER_API_KEY,
+  });
+
   const { text } = await generateText({
     prompt: `${prompt}\n\nTranscription: ${transcription}`,
-    model: togetherVercelAiClient(apiKey)(
-      "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    ),
+    model: togetherAI("meta-llama/Llama-3.3-70B-Instruct-Turbo"),
   });
-  
+
   return text;
 };
 ```
